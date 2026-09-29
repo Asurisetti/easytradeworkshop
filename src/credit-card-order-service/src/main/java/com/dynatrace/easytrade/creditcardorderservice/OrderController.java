@@ -132,7 +132,14 @@ public class OrderController {
         try (Connection conn = dbHelper.getConnection()) {
             final Client client = openFeatureAPI.getClient();
             if (client.getBooleanValue("credit_card_meltdown", false)) {
-                CountSequenceTotal(5, 2, 14);
+                // The meltdown flag exercises an extra computation path. A failure here must
+                // not take down the whole request: contain it so checkout degrades gracefully
+                // instead of returning a 500 on every call while the flag is enabled.
+                try {
+                    CountSequenceTotal(5, 2, 14);
+                } catch (ArithmeticException e) {
+                    logger.warn("credit_card_meltdown computation failed; continuing with normal status lookup", e);
+                }
             }
 
             Optional<CreditCardOrderStatus> status = dbHelper.getLastOrderStatusForAccountId(conn, accountId);
@@ -142,9 +149,6 @@ public class OrderController {
                             "Status for the given account id does not exist!"));
         } catch (SQLException e) {
             return handleSQLException(e);
-        } catch (Exception e) {
-            logger.error("Exception occured", e);
-            throw e;
         }
     }
 
@@ -322,11 +326,16 @@ public class OrderController {
 
     private int CountArythmeticSequenceTotal(int firstElement, int step, int count)
     {
-        // this has a wrong value (normally would be 2), because we want to create an exception!
-        int theGreatDivider = 0;
+        // Divisor for the arithmetic-sequence sum. For an arithmetic series the sum is
+        // (firstElement + lastElement) * count / 2, so the divisor is 2. Guard against a
+        // zero divisor so this computation can never throw ArithmeticException.
+        int theGreatDivider = 2;
+
+        if (theGreatDivider == 0) {
+            return 0;
+        }
 
         int lastElement = firstElement + (step * (count - 1));
-        // deepcode ignore DivisionByZero: exception should be thrown here
         int total = (firstElement + lastElement) * count / theGreatDivider;
 
         return total;
